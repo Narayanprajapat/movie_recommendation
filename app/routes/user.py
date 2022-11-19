@@ -1,9 +1,8 @@
-import pdb
-
 from flask import Blueprint, request
 from app.helper.responseMaker import response_maker
-from datetime import datetime
+import datetime
 import json
+import math
 
 user_blueprint = Blueprint('user_blueprint', __name__, template_folder="template")
 
@@ -47,14 +46,23 @@ def fetch_movie():
         return response_maker({'message': 'Please check movie data'}, 500)
 
     try:
-        print(user_id)
         find_user_data = [user for user in user_data_json if int(user['user_id']) == int(user_id)]
-        # pdb.set_trace()
-        if len(find_user_data) == 0:
-            return response_maker({'message': 'User not exist'}, 400)
+        current_day = datetime.date.today()
+        current_date_format = dateFormat(datetime.date.strftime(current_day, "%m/%d/%Y"))
 
-        find_user_data = find_user_data[0]
-        user_preference_data = find_user(user_id, user_preference_json)[0]
+        # user not exist random output
+        if len(find_user_data) == 0:
+            movie_resp = random_recommendation(movie_json, current_date_format)
+            return response_maker({'message': 'User not exist', "data": top_ten_sorted(movie_resp)}, 200)
+
+        # user preference if not exist user in user preference
+        user_preference_data = find_user(user_id, user_preference_json)
+        if len(user_preference_data) == 0:
+            movie_resp = random_recommendation(movie_json, current_date_format)
+            return response_maker({'message': 'No user preference', "data": top_ten_sorted(movie_resp)}, 200)
+
+        # related user
+        user_preference_data = user_preference_data[0]
         related_user_data = related_users_json[str(user_id)]
         genres = dict()
         for related_user in related_user_data:
@@ -65,18 +73,36 @@ def fetch_movie():
                     genre = preference['genre']
                     preference_score = preference['preference_score']
                     if genre in genres:
-                        genres[genre] = genres[genre] + 1
-                        # genres[genre] = genres[genre] + preference_score
+                        genres[genre] = genres[genre] + preference_score
                     else:
-                        # genres[genre] = preference_score
-                        genres[genre] = 1
+                        genres[genre] = preference_score
             except Exception as e:
                 pass
 
-        print(genres)
-        print(len(related_user_data))
-        print(user_preference_data)
-        return response_maker({'message': 'success'}, 201)
+        for genre in genres:
+            genres[genre] = math.ceil(genres[genre] / len(related_user_data))
+
+        for up in user_preference_data['preference']:
+            if up['genre'] in genres:
+                genres[up['genre']] = genres[up['genre']] + up['preference_score']
+            else:
+                genres[up['genre']] = up['preference_score']
+
+        # Current date
+
+        find_movies_by_genre = dict()
+        for genre in genres:
+            find_movies_by_genre[genre] = movie_find_by_genre(genre, movie_json, current_date_format)
+
+        count = sum([genres[i] for i in genres]) / 10  # 10 movies
+
+        for gen in genres:
+            genres[gen] = math.ceil(genres[gen] / count)
+
+        sorted_genre = dict(sorted(genres.items(), key=lambda x: x[1], reverse=True))
+
+        movies = get_movie_from_genre(sorted_genre, find_movies_by_genre)
+        return response_maker({'message': 'success', 'data': top_ten_sorted(movies)}, 201)
     except Exception as e:
         print(e)
         return response_maker({'message': 'Internal server error'}, 500)
@@ -85,3 +111,69 @@ def fetch_movie():
 def find_user(user_id, json_data):
     user_data = [user for user in json_data if int(user['user_id']) == int(user_id)]
     return user_data
+
+
+# Count days
+def numOfDays(date1, date2):
+    return (date2 - date1).days
+
+
+# Date formate
+def dateFormat(normalDate):
+    splitDate = normalDate.split('/')
+    return datetime.date(int(splitDate[2]), int(splitDate[0]), int(splitDate[1]))
+
+
+def movie_find_by_genre(genre, movie_json, current_date_format):
+    filter_movie_list = list()
+    for i in movie_json:
+        release_date = dateFormat(i['release_date'])
+        i['old_days_count'] = numOfDays(release_date, current_date_format)
+        if genre in i['genres']:
+            filter_movie_list.append(i)
+
+    sorted_movies = sorted(movie_json, key=lambda m: m['old_days_count'])
+    return sorted_movies
+
+
+def get_movie_from_genre(genra_order, genre_movie):
+    print(genra_order, genre_movie)
+    movie_list = list()
+
+    for g in genra_order:
+        count = genra_order[g]
+        for gm in genre_movie[g]:
+            if count != 0 or len(movie_list) != 0:
+                if not gm['movie_id'] in movie_list:
+                    if len(movie_list) == 10:
+                        return movie_list
+                    # del gm['old_days_count']
+                    movie_list.append(gm)
+            count = count - 1
+
+
+def random_recommendation(movie_json, current_date_format):
+    for i in movie_json:
+        release_date = dateFormat(i['release_date'])
+        i['old_days_count'] = numOfDays(release_date, current_date_format)
+
+    sorted_movies = sorted(movie_json, key=lambda m: m['old_days_count'])
+
+    movie_list = list()
+    for m in sorted_movies:
+        if len(movie_list) == 10:
+            return movie_list
+        # del m['old_days_count']
+        movie_list.append(m)
+
+    return movie_list
+
+
+def top_ten_sorted(movies):
+    sorted_movies = sorted(movies, key=lambda m: m['old_days_count'])
+    movie_list = list()
+    for m in sorted_movies:
+        del m['old_days_count']
+        movie_list.append(m)
+
+    return movie_list
